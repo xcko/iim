@@ -22,7 +22,7 @@
 #include <openssl/ssl.h>
 
 #define SERVER_NICK "-!-"
-#define SERVER_PORT "6667"
+#define SERVER_PORT "6697"
 #define SERVER_HOST "irc.freenode.net"
 
 #define IRCDIR      "irc"
@@ -53,7 +53,7 @@ static struct conn {
 	SSL_CTX *ctx;
 } *irc;
 
-static int use_ssl;
+static int use_ssl = 1;
 static char nick[BUF_NICK_LEN];
 
 __attribute__((noreturn)) static void err(const char *fmt, ...) {
@@ -207,8 +207,8 @@ static bool add_channel(char *channame) {
 
 static void write_out(char *channame, const char *nickname, const char *mesg) {
 	const time_t t = time(NULL);
-	char timebuf[strlen("YYYY-MM-DD HH:MM:SS") + 1];
-	strftime(timebuf, sizeof timebuf, "%F %T", localtime(&t));
+	char timebuf[strlen("HH:MM:SS") + 1];
+	strftime(timebuf, sizeof timebuf, "%T", localtime(&t));
 
 	char outpath[BUF_PATH_LEN] = OUTFILE;
 	if (*channame && to_irc_lower(channame, strlen(channame)))
@@ -417,8 +417,8 @@ int main(int argc, char *argv[]) {
 		case 'k': pass = getenv(argv[++i]); break;
 		case 'f': name = argv[++i]; break;
 		case 'p': port = argv[++i]; break;
-		case 'e': use_ssl = 1; ++i; break;
-		default : err("usage: iim [-i <irc-dir>] [-s <server>] [-p <port>] [-n <nick>] [-k <passwd-env-var>] [-f <fullname>] [ -e ssl]\n");
+		case 'e': use_ssl = 0; ++i; break;
+		default : err("usage: iim [-i <irc-dir>] [-s <server>] [-p <port>] [-n <nick>] [-k <passwd-env-var>] [-f <fullname>] [ -e unssl]\n");
 	}
 
 	/* sanitize args */
