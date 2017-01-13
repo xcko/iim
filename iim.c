@@ -19,6 +19,7 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <openssl/ssl.h>
 
 #define SERVER_NICK "-!-"
 #define SERVER_PORT "6667"
@@ -46,8 +47,14 @@ static struct channel {
 	struct channel *next;
 } *channels;
 
+static struct conn {
+	int fd;
+	SSL *ssl;
+	SSL_CTX *ctx;
+} *irc;
+
+static int use_ssl;
 static char nick[BUF_NICK_LEN];
-static int ircfd;
 
 __attribute__((noreturn)) static void err(const char *fmt, ...) {
 	va_list ap;
@@ -57,16 +64,17 @@ __attribute__((noreturn)) static void err(const char *fmt, ...) {
 	exit(EXIT_FAILURE);
 }
 
-static bool read_line(int fd, char *buffer, size_t buffer_len) {
+static bool read_line(int fd, char *buffer, size_t buffer_len, int from_server) {
 	size_t i = 0;
 	for (char c = '\0'; i < buffer_len && c != '\n'; buffer[i++] = c)
-		if (read(fd, &c, 1) != 1) return false;
+		if ((from_server && use_ssl ? SSL_read(irc->ssl, &c, 1) : read(fd, &c, 1)) != 1) return false;
 	if (i > 0 && buffer[i - 1] == '\n') buffer[i - 1] = '\0';
 	if (i > 1 && buffer[i - 2] == '\r') buffer[i - 2] = '\0';
 	return i > 0;
 }
 
 static bool connect_to_irc(const char *host, const char *port) {
+	struct conn *c;
 	struct addrinfo *res = NULL, hints = {0};
 	bool success = false;
 
@@ -76,24 +84,37 @@ static bool connect_to_irc(const char *host, const char *port) {
 
 	if (getaddrinfo(host, port, &hints, &res) != 0) return false;
 
+	c = malloc(sizeof *c);
 	for (struct addrinfo *ai = res; ai; ai = ai->ai_next) {
-		if ((ircfd = socket(ai->ai_family, ai->ai_socktype, 0)) == -1) continue;
-		if ((success = connect(ircfd, res->ai_addr, res->ai_addrlen) == 0)) break;
-		close(ircfd);
+		if ((c->fd = socket(ai->ai_family, ai->ai_socktype, 0)) == -1) continue;
+		if ((success = connect(c->fd, res->ai_addr, res->ai_addrlen) == 0)) break;
+		close(c->fd);
+	}
+	if(use_ssl) {
+		c->ssl = NULL;
+		c->ctx = NULL;
+		SSL_library_init();
+		c->ctx = SSL_CTX_new(SSLv23_client_method());
+		if(c->ctx == NULL)
+			err("error creating ssl context.\n");
+		c->ssl = SSL_new(c->ctx);
+		if(!SSL_set_fd(c->ssl, c->fd) || (SSL_connect(c->ssl) != 1))
+			err("error connecting with ssl.\n");
 	}
 
+	irc = c;
 	if (res) freeaddrinfo(res);
 	return success;
 }
 
-static bool identify(int ircfd, const char *pass, const char *nick, const char *name) {
+static bool identify(struct conn *c, const char *pass, const char *nick, const char *name) {
 	char mesg[BUF_MESG_LEN * 3] = "";
 	int len = 0;
 
 	if (pass) len += snprintf(mesg, sizeof mesg, "PASS %s\r\n", pass);
 	len += snprintf(mesg + len, sizeof mesg - len, "NICK %s\r\nUSER %s 0 * : %s\r\n", nick, nick, name);
 
-	return len == write(ircfd, mesg, len);
+	return len == (use_ssl ? SSL_write(c->ssl, mesg, len) : write(c->fd, mesg, len));
 }
 
 static bool create_dirtree(const char *path) {
@@ -267,8 +288,8 @@ static int handle_quit(char *params, char *mesg, const int mesg_len) {
 static bool handle_server_output(void) {
 	char input[BUFSIZ] = "";
 
-	if (!read_line(ircfd, input, sizeof input)) {
-		if (errno != EBADF) close(ircfd);
+	if (!read_line(irc->fd, input, sizeof input, 1)) {
+		if (errno != EBADF) close(irc->fd);
 		err("remote host closed connection\n");
 	}
 
@@ -331,7 +352,7 @@ static bool handle_server_output(void) {
 		if (strcmp(nick, params) == 0) add_channel(prefix);
 	} else if (strcmp("PING", command) == 0) {
 		const int mesg_len = snprintf(mesg, sizeof mesg, "PONG %s\r\n", trailing);
-		write(ircfd, mesg, mesg_len);
+		use_ssl ? SSL_write(irc->ssl, mesg, mesg_len) : write(irc->fd, mesg, mesg_len);
 		*mesg = '\0'; /* do not write pong messages to out file */
 	} else if (trailing) snprintf(mesg, sizeof mesg, "%s%s", middle ? middle : "", trailing);
 
@@ -349,7 +370,7 @@ static bool handle_server_output(void) {
 
 static void handle_channel_input(struct channel *c) {
 	char input[BUFSIZ] = "", mesg[BUF_MESG_LEN] = "";
-	const bool r = read_line(c->fd, input, sizeof input);
+	const bool r = read_line(c->fd, input, sizeof input, 0);
 	unsigned mesg_len = 0, cmd = input[1];
 
 	if (!r) {
@@ -377,7 +398,7 @@ static void handle_channel_input(struct channel *c) {
 		mesg[sizeof mesg - 1] = '\n';
 	}
 
-	if (mesg_len > 0) write(ircfd, mesg, mesg_len);
+	if (mesg_len > 0) use_ssl ? SSL_write(irc->ssl, mesg, mesg_len) : write(irc->fd, mesg, mesg_len);
 }
 
 int main(int argc, char *argv[]) {
@@ -396,7 +417,8 @@ int main(int argc, char *argv[]) {
 		case 'k': pass = getenv(argv[++i]); break;
 		case 'f': name = argv[++i]; break;
 		case 'p': port = argv[++i]; break;
-		default : err("usage: iim [-i <irc-dir>] [-s <server>] [-p <port>] [-n <nick>] [-k <passwd-env-var>] [-f <fullname>]\n");
+		case 'e': use_ssl = 1; ++i; break;
+		default : err("usage: iim [-i <irc-dir>] [-s <server>] [-p <port>] [-n <nick>] [-k <passwd-env-var>] [-f <fullname>] [ -e ssl]\n");
 	}
 
 	/* sanitize args */
@@ -425,7 +447,7 @@ int main(int argc, char *argv[]) {
 	 */
 	if (!connect_to_irc(host, port)) err("cannot connect to '%s:%s'\n", host, port);
 	if (!add_channel("")) err("cannot create main channel\n");
-	if (!identify(ircfd, pass, nick, name)) err("cannot identify or message cropped\n");
+	if (!identify(irc, pass, nick, name)) err("cannot identify or message cropped\n");
 
 	/*
 	 * listen on the descriptors
@@ -435,11 +457,11 @@ int main(int argc, char *argv[]) {
 	time_t last_response = 0;
 	for (bool running = true; running;) {
 		struct timeval tv = { .tv_sec = PING_TMOUT / 3, .tv_usec = 0 };
-		int maxfd = ircfd;
+		int maxfd = irc->fd;
 		fd_set fds;
 
 		FD_ZERO(&fds);
-		FD_SET(ircfd, &fds);
+		FD_SET(irc->fd, &fds);
 
 		for (struct channel *c = channels; c; c = c->next) {
 			if (maxfd < c->fd) maxfd = c->fd;
@@ -453,9 +475,9 @@ int main(int argc, char *argv[]) {
 				if (time(NULL) - last_response >= PING_TMOUT) err("ping timeout\n");
 				char ping_mesg[BUF_MESG_LEN] = "";
 				const int ping_mesg_len = snprintf(ping_mesg, sizeof ping_mesg, "PING %s\r\n", host);
-				write(ircfd, ping_mesg, ping_mesg_len);
+				use_ssl ? SSL_write(irc->ssl, ping_mesg, ping_mesg_len) : write(irc->fd, ping_mesg, ping_mesg_len);
 		} else {
-			if (FD_ISSET(ircfd, &fds)) {
+			if (FD_ISSET(irc->fd, &fds)) {
 				last_response = time(NULL);
 				running = handle_server_output();
 			}
@@ -467,7 +489,8 @@ int main(int argc, char *argv[]) {
 
 	/* clean up */
 	for (struct channel *next = channels->next; channels; next = (channels = next) ? next->next : NULL) free(channels);
-	if (ircfd) close(ircfd);
+	if (use_ssl) SSL_free(irc->ssl); SSL_CTX_free(irc->ctx);
+	if (irc->fd) close(irc->fd);
 	return EXIT_SUCCESS;
 }
 
