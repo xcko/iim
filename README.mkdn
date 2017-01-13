@@ -23,7 +23,7 @@ adheres to the Unix philosophy.
 build
 -----
 
-	make iim CFLAGS="-std=c99 -Os -Wall -Wextra -pedantic"
+	make iim CFLAGS="-std=c99 -Os -Wall -Werror -lssl"
 
 install
 -------
@@ -39,6 +39,7 @@ switches
 	-k <enviromental variable holding the server password>
 	-n <user's nickname>
 	-f <user's full/real name>
+	-e ssl - encrypt with ssl
 
 irc commands
 ------------
@@ -59,13 +60,10 @@ irc commands
 	/l [message]
 	leave or part current channel with message
 
-	/m <mode>
-	change current channel's mode (mlock)
-
 	/n <nickname>
 	change nickname
 
-	/p <message>
+	/m <message>
 	send a message to current channel or user
 
 	/q [message]
