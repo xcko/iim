@@ -1,4 +1,5 @@
-#define _POSIX_SOURCE
+#define _POSIX_C_SOURCE = 201112
+#define _DEFAULT_SOURCE
 
 #include <stdio.h>
 #include <stdlib.h>
