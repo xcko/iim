@@ -252,10 +252,6 @@ static int handle_names(char *channel, char *mesg, const int mesg_len) {
 	return snprintf(mesg, mesg_len, "NAMES %s\r\n", channel);
 }
 
-static int handle_mode(char *channel, char *params, char *mesg, const int mesg_len) {
-	return (*params) ? snprintf(mesg, mesg_len, "MODE %s %s\r\n", channel, params + 1) : 0;
-}
-
 static int handle_invit(char *channel, char *params, char *mesg, const int mesg_len) {
 	return (*params) ? snprintf(mesg, mesg_len, "INVITE %s %s\r\n", params + 1, channel) : 0;
 }
@@ -368,8 +364,7 @@ static void handle_channel_input(struct channel *c) {
 		case 'n': mesg_len = handle_nick (         input+2, mesg, sizeof mesg); break;
 		case 'q': mesg_len = handle_quit (         input+2, mesg, sizeof mesg); break;
 		case 'k': mesg_len = handle_kick (c->name, input+2, mesg, sizeof mesg); break;
-		case 'm': mesg_len = handle_mode (c->name, input+2, mesg, sizeof mesg); break;
-		case 'p': mesg_len = handle_priv (c->name, input+2, mesg, sizeof mesg); break;
+		case 'm': mesg_len = handle_priv (c->name, input+2, mesg, sizeof mesg); break;
 		case 'i': mesg_len = handle_invit(c->name, input+2, mesg, sizeof mesg); break;
 		case 'l': mesg_len = handle_leave(c->name, input+2, mesg, sizeof mesg); break;
 		case 't': mesg_len = handle_topic(c->name, input+2, mesg, sizeof mesg); break;
