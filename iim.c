@@ -488,8 +488,10 @@ int main(int argc, char *argv[]) {
 	}
 
 	/* clean up */
+	for (struct channel *next = channels->next; channels; next = (channels = next) ? next->next : NULL) free(channels);
 	if (use_ssl) SSL_free(irc->ssl); SSL_CTX_free(irc->ctx);
 	if (irc->fd) close(irc->fd);
+	free(irc);
 	return EXIT_SUCCESS;
 }
 
